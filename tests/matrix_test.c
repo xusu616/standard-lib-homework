@@ -209,9 +209,9 @@ static void TestCollisionFeedback(void)
     unsigned column;
 
     Snake_Init(&game, 1);
-    memcpy(game.cells, bodyLoop, sizeof(bodyLoop));
-    game.length = 6;
-    game.food = 63;
+    memcpy(game.bodyCellIds, bodyLoop, sizeof(bodyLoop));
+    game.snakeLength = 6;
+    game.foodCellId = 63;
     game.direction = game.nextDirection = SNAKE_UP;
     game.state = SNAKE_PLAYING;
     Buzzer_UpdateState(game.state);
