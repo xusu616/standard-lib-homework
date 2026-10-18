@@ -1,12 +1,12 @@
 #include "snake.h"
 
-static uint8_t Snake_Occupies(const SnakeGame *game, uint8_t cell)
+static uint8_t Snake_Occupies(const SnakeGame *game, uint8_t cellId)
 {
-    uint8_t i;
+    uint8_t bodySegmentIndex;
 
-    for (i = 0; i < game->length; i++)
+    for (bodySegmentIndex = 0; bodySegmentIndex < game->snakeLength; bodySegmentIndex++)
     {
-        if (game->cells[i] == cell)
+        if (game->bodyCellIds[bodySegmentIndex] == cellId)
         {
             return 1;
         }
@@ -16,40 +16,39 @@ static uint8_t Snake_Occupies(const SnakeGame *game, uint8_t cell)
 
 static void Snake_PlaceFood(SnakeGame *game)
 {
-    uint8_t cell;
-    uint8_t freeIndex;
+    uint8_t candidateCellId;  // 当前检查的格子编号，可能有蛇，也可能为空
+    uint8_t emptyCellsToSkip; // 选中食物位置前，还需要跳过几个空格
 
-    if (game->length == SNAKE_CAPACITY)
+    if (game->snakeLength == SNAKE_CAPACITY)
     {
-        game->food = SNAKE_NO_FOOD;
+        game->foodCellId = SNAKE_NO_FOOD;
         game->state = SNAKE_WON;
         return;
     }
-
     /* Choose among empty cells directly, without random retry loops. */
     game->randomState = game->randomState * 1664525UL + 1013904223UL;
-    freeIndex = (uint8_t)((game->randomState >> 16) %
-                         (SNAKE_CAPACITY - game->length));
-    for (cell = 0; cell < SNAKE_CAPACITY; cell++)
+    emptyCellsToSkip = (uint8_t)((game->randomState >> 16) %
+                                (SNAKE_CAPACITY - game->snakeLength));
+    for (candidateCellId = 0; candidateCellId < SNAKE_CAPACITY; candidateCellId++)
     {
-        if (!Snake_Occupies(game, cell))
+        if (!Snake_Occupies(game, candidateCellId))
         {
-            if (freeIndex == 0)
+            if (emptyCellsToSkip == 0)
             {
-                game->food = cell;
+                game->foodCellId = candidateCellId;
                 return;
             }
-            freeIndex--;
+            emptyCellsToSkip--;
         }
     }
 }
 
 void Snake_Init(SnakeGame *game, uint32_t seed)
 {
-    game->cells[0] = 4 * SNAKE_SIDE + 3;
-    game->cells[1] = 4 * SNAKE_SIDE + 2;
-    game->cells[2] = 4 * SNAKE_SIDE + 1;
-    game->length = 3;
+    game->bodyCellIds[0] = 4 * SNAKE_SIDE + 3;
+    game->bodyCellIds[1] = 4 * SNAKE_SIDE + 2;
+    game->bodyCellIds[2] = 4 * SNAKE_SIDE + 1;
+    game->snakeLength = 3;
     game->turnQueued = 0;
     game->direction = SNAKE_RIGHT;
     game->nextDirection = SNAKE_RIGHT;
@@ -91,12 +90,12 @@ void Snake_Turn(SnakeGame *game, uint8_t clockwise)
 
 void Snake_Step(SnakeGame *game)
 {
-    int x;
-    int y;
-    uint8_t nextCell;
-    uint8_t grows;
-    uint8_t collisionLength;
-    uint8_t i;
+    int nextHeadX;
+    int nextHeadY;
+    uint8_t nextHeadCellId; // 蛇头下一步将到达的格子编号
+    uint8_t eatsFood;       // 下一步是否吃到食物
+    uint8_t segmentsToCheck; // 本次需要检查碰撞的蛇身节数
+    uint8_t bodySegmentIndex;
 
     if (game->state != SNAKE_PLAYING)
     {
@@ -105,44 +104,45 @@ void Snake_Step(SnakeGame *game)
 
     game->direction = game->nextDirection;
     game->turnQueued = 0;
-    x = game->cells[0] % SNAKE_SIDE;
-    y = game->cells[0] / SNAKE_SIDE;
+    nextHeadX = game->bodyCellIds[0] % SNAKE_SIDE;
+    nextHeadY = game->bodyCellIds[0] / SNAKE_SIDE;
     switch (game->direction)
     {
-        case SNAKE_UP:    y--; break;
-        case SNAKE_RIGHT: x++; break;
-        case SNAKE_DOWN:  y++; break;
-        case SNAKE_LEFT:  x--; break;
+        case SNAKE_UP:    nextHeadY--; break;
+        case SNAKE_RIGHT: nextHeadX++; break;
+        case SNAKE_DOWN:  nextHeadY++; break;
+        case SNAKE_LEFT:  nextHeadX--; break;
     }
 
     /* Opposite edges connect; collision checks use the wrapped destination. */
-    x = (x + SNAKE_SIDE) % SNAKE_SIDE;
-    y = (y + SNAKE_SIDE) % SNAKE_SIDE;
+    nextHeadX = (nextHeadX + SNAKE_SIDE) % SNAKE_SIDE;
+    nextHeadY = (nextHeadY + SNAKE_SIDE) % SNAKE_SIDE;
 
-    nextCell = (uint8_t)(y * SNAKE_SIDE + x);
-    grows = (nextCell == game->food);
+    nextHeadCellId = (uint8_t)(nextHeadY * SNAKE_SIDE + nextHeadX);
+    eatsFood = (nextHeadCellId == game->foodCellId);
     /* The old tail leaves this tick unless food is eaten. */
-    collisionLength = grows ? game->length : (uint8_t)(game->length - 1);
-    for (i = 0; i < collisionLength; i++)
+    segmentsToCheck = eatsFood ? game->snakeLength : (uint8_t)(game->snakeLength - 1);
+    for (bodySegmentIndex = 0; bodySegmentIndex < segmentsToCheck; bodySegmentIndex++)
     {
-        if (game->cells[i] == nextCell)
+        if (game->bodyCellIds[bodySegmentIndex] == nextHeadCellId)
         {
             game->state = SNAKE_LOST;
             return;
         }
     }
 
-    if (grows)
+    if (eatsFood)
     {
-        game->length++;
+        game->snakeLength++;
     }
-    for (i = (uint8_t)(game->length - 1); i > 0; i--)
+    for (bodySegmentIndex = (uint8_t)(game->snakeLength - 1);
+         bodySegmentIndex > 0; bodySegmentIndex--)
     {
-        game->cells[i] = game->cells[i - 1];
+        game->bodyCellIds[bodySegmentIndex] = game->bodyCellIds[bodySegmentIndex - 1];
     }
-    game->cells[0] = nextCell;
+    game->bodyCellIds[0] = nextHeadCellId;
 
-    if (grows)
+    if (eatsFood)
     {
         Snake_PlaceFood(game);
     }

@@ -28,6 +28,7 @@ typedef struct
 static SnakeGame game;
 static uint8_t frame[8];
 static uint32_t buzzerTicksRemaining;
+//上一次是写uint8_t导致到的数字被截断了
 static SnakeState buzzerPreviousState = SNAKE_READY;
 
 static void Buzzer_UpdateState(SnakeState state)
@@ -150,9 +151,9 @@ static uint8_t Key_Pressed(KeyFilter *key, uint8_t rawDown)
     return 0;
 }
 
-static void Frame_AddCell(uint8_t cell)
+static void Frame_AddCell(uint8_t cellId)
 {
-    frame[cell % SNAKE_SIDE] |= (uint8_t)(1U << (cell / SNAKE_SIDE));
+    frame[cellId % SNAKE_SIDE] |= (uint8_t)(1U << (cellId / SNAKE_SIDE));
 }
 
 static void Frame_Update(uint32_t elapsedMs)
@@ -187,13 +188,13 @@ static void Frame_Update(uint32_t elapsedMs)
         return;
     }
 
-    for (i = 0; i < game.length; i++)
+    for (i = 0; i < game.snakeLength; i++)
     {
-        Frame_AddCell(game.cells[i]);
+        Frame_AddCell(game.bodyCellIds[i]);
     }
-    if (game.food != SNAKE_NO_FOOD && (elapsedMs / 200U) % 2U == 0)
+    if (game.foodCellId != SNAKE_NO_FOOD && (elapsedMs / 200U) % 2U == 0)
     {
-        Frame_AddCell(game.food);
+        Frame_AddCell(game.foodCellId);
     }
 }
 

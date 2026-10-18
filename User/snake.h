@@ -26,16 +26,17 @@ typedef enum
 
 typedef struct
 {
-    /* Head first; a cell is encoded as y * 8 + x. */
-    uint8_t cells[SNAKE_CAPACITY];
-    uint8_t length;
-    uint8_t food;
+    /* 格子编号 = y * 8 + x，范围 0~63；数组第 0 项始终是蛇头。 */
+    uint8_t bodyCellIds[SNAKE_CAPACITY]; // 每一节蛇身所在的格子编号
+    uint8_t snakeLength;                // 当前蛇身节数
+    uint8_t foodCellId;                 // 食物所在的格子编号
     uint8_t turnQueued;
     SnakeDirection direction;
     SnakeDirection nextDirection;
     SnakeState state;
     uint32_t randomState;
 } SnakeGame;
+//差不多就是这样装了两层结构体，其实还是清楚简单的
 
 void Snake_Init(SnakeGame *game, uint32_t seed);
 void Snake_TogglePlay(SnakeGame *game);
