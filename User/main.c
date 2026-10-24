@@ -1,92 +1,31 @@
 #include "system.h"
-#include "SysTick.h"
-#include "snake.h"
 
-#define MATRIX_ROW_PINS ((uint16_t)0xFF00)
-#define MATRIX_DATA_PIN GPIO_Pin_12
-#define MATRIX_LATCH_PIN GPIO_Pin_13
-#define MATRIX_CLOCK_PIN GPIO_Pin_14
-#define KEY_LEFT_PIN GPIO_Pin_2
-#define KEY_RIGHT_PIN GPIO_Pin_6
-#define KEY_PLAY_PIN GPIO_Pin_7
-#define KEY_DEBOUNCE_MS 20
-#define MOVE_INTERVAL_MS 300
+#define LED_PINS ((uint16_t)0x00FF)
 #define BUZZER_PIN GPIO_Pin_1
-#define BUZZER_DURATION_MS 1000
-#define BUZZER_ON_US 1000U
+#define BUTTON_PINS (GPIO_Pin_2 | GPIO_Pin_13 | GPIO_Pin_6 | GPIO_Pin_7)
+#define BUTTON_EXTI_LINES (EXTI_Line2 | EXTI_Line13 | EXTI_Line6 | EXTI_Line7)
+#define LED_STEP_MS 200U
+#define BUTTON_DEBOUNCE_MS 20U
+#define BUTTON_COUNT 4
 
-#if BUZZER_ON_US > 1000U
-#error BUZZER_ON_US_must_be_between_0_and_1000
-#endif
-
-typedef struct
+static const uint16_t buttonPins[BUTTON_COUNT] =
 {
-    uint8_t stableDown;
-    uint8_t changeTicks;
-} KeyFilter;
+    GPIO_Pin_2, GPIO_Pin_13, GPIO_Pin_6, GPIO_Pin_7
+};
 
-static SnakeGame game;
-static uint8_t frame[8];
-static uint32_t buzzerTicksRemaining;
-//上一次是写uint8_t导致到的数字被截断了
-static SnakeState buzzerPreviousState = SNAKE_READY;
+static volatile uint32_t systemMilliseconds;
+static volatile uint32_t buttonLastEdgeMs[BUTTON_COUNT];
+static volatile uint8_t buttonEdgePending[BUTTON_COUNT];
+static uint8_t buttonStableDown[BUTTON_COUNT];
+static int8_t ledDirection;
+static uint8_t currentLedIndex;
+static uint32_t lastLedStepMs;
 
-static void Buzzer_UpdateState(SnakeState state)
+static void Led_Show(uint8_t ledIndex)
 {
-    /* Entering LOST triggers the configured duration once, without retriggering. */
-    if (state != buzzerPreviousState)
-    {
-        buzzerPreviousState = state;
-        buzzerTicksRemaining = (state == SNAKE_LOST) ? BUZZER_DURATION_MS : 0;
-        GPIO_SetBits(GPIOA, BUZZER_PIN);
-    }
-}
-
-static void Buzzer_WaitOneMs(void)
-{
-    if (buzzerTicksRemaining != 0)
-    {
-        /* Gate at about 1 kHz; BUZZER_ON_US sets the on time per millisecond.
-           0% and 100% omit the empty phase: this SysTick driver cannot delay 0.
-           The total wait remains 1 ms so matrix refresh keeps running. */
-        if (BUZZER_ON_US > 0U)
-        {
-            GPIO_ResetBits(GPIOA, BUZZER_PIN);
-            delay_us(BUZZER_ON_US);
-        }
-        GPIO_SetBits(GPIOA, BUZZER_PIN);
-        if (BUZZER_ON_US < 1000U)
-        {
-            delay_us(1000U - BUZZER_ON_US);
-        }
-        buzzerTicksRemaining--;
-    }
-    else
-    {
-        delay_ms(1);
-    }
-}
-
-static void Matrix_WriteColumns(uint8_t value)
-{
-    uint8_t bit;
-
-    GPIO_ResetBits(GPIOA, MATRIX_LATCH_PIN);
-    /* MSB first: the final bit reaches QA, which is physical column 1. */
-    for (bit = 0; bit < 8; bit++)
-    {
-        GPIO_ResetBits(GPIOA, MATRIX_CLOCK_PIN);
-        GPIO_WriteBit(GPIOA, MATRIX_DATA_PIN,
-                      (value & 0x80U) ? Bit_SET : Bit_RESET);
-        delay_us(1);
-        GPIO_SetBits(GPIOA, MATRIX_CLOCK_PIN);
-        delay_us(1);
-        value <<= 1;
-    }
-    GPIO_ResetBits(GPIOA, MATRIX_CLOCK_PIN);
-    GPIO_SetBits(GPIOA, MATRIX_LATCH_PIN);
-    delay_us(1);
-    GPIO_ResetBits(GPIOA, MATRIX_LATCH_PIN);
+    /* D4~D11 = PB0~PB7, low level lights the LED. */
+    GPIO_SetBits(GPIOB, LED_PINS);
+    GPIO_ResetBits(GPIOB, (uint16_t)(GPIO_Pin_0 << ledIndex));
 }
 
 static void Hardware_Init(void)
@@ -96,182 +35,178 @@ static void Hardware_Init(void)
     RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA | RCC_APB2Periph_GPIOB |
                           RCC_APB2Periph_AFIO, ENABLE);
 
-    /* PA13/PA14 drive the matrix, so both JTAG and SWD must be released.
-       USART1 ISP programming on PA9/PA10 is still available. */
+    /* SW2 uses PA13, and LEDs use PB3/PB4: release SWD and JTAG. */
     GPIO_PinRemapConfig(GPIO_Remap_SWJ_Disable, ENABLE);
 
-    /* Common-cathode rows are disabled HIGH before enabling the outputs. */
-    GPIO_SetBits(GPIOB, MATRIX_ROW_PINS);
-    gpio.GPIO_Pin = MATRIX_ROW_PINS;
+    GPIO_SetBits(GPIOB, LED_PINS);
+    gpio.GPIO_Pin = LED_PINS;
     gpio.GPIO_Mode = GPIO_Mode_Out_PP;
     gpio.GPIO_Speed = GPIO_Speed_2MHz;
     GPIO_Init(GPIOB, &gpio);
 
-    GPIO_ResetBits(GPIOA, MATRIX_DATA_PIN | MATRIX_LATCH_PIN | MATRIX_CLOCK_PIN);
-    gpio.GPIO_Pin = MATRIX_DATA_PIN | MATRIX_LATCH_PIN | MATRIX_CLOCK_PIN;
-    GPIO_Init(GPIOA, &gpio);
-
-    /* P11/PA1: active LOW. Released open-drain output is the silent state. */
+    /* PA1/P11: the active buzzer sounds LOW; released output is silent. */
     GPIO_SetBits(GPIOA, BUZZER_PIN);
     gpio.GPIO_Pin = BUZZER_PIN;
     gpio.GPIO_Mode = GPIO_Mode_Out_OD;
     GPIO_Init(GPIOA, &gpio);
-    Matrix_WriteColumns(0x00);
 
-    /* SW2 shares PA13 with the latch: do not use or press it during play. */
-    gpio.GPIO_Pin = KEY_LEFT_PIN | KEY_RIGHT_PIN | KEY_PLAY_PIN;
+    gpio.GPIO_Pin = BUTTON_PINS;
     gpio.GPIO_Mode = GPIO_Mode_IPU;
     GPIO_Init(GPIOA, &gpio);
 }
 
-static void Matrix_ScanColumn(uint8_t column)
+static void exti_init(void)
 {
-    /* Row cathodes: HIGH = off. Column anodes: HIGH = selected.
-       Blank every row before shifting/latching to prevent ghost pixels. */
-    GPIO_SetBits(GPIOB, MATRIX_ROW_PINS);
-    Matrix_WriteColumns((uint8_t)(1U << column));
-    GPIO_ResetBits(GPIOB, (uint16_t)((uint16_t)frame[column] << 8));
+    EXTI_InitTypeDef exti;
+    NVIC_InitTypeDef nvic;
+
+    /* AFIO selects which GPIO port is connected to each EXTI line. */
+    GPIO_EXTILineConfig(GPIO_PortSourceGPIOA, GPIO_PinSource2);
+    GPIO_EXTILineConfig(GPIO_PortSourceGPIOA, GPIO_PinSource13);
+    GPIO_EXTILineConfig(GPIO_PortSourceGPIOA, GPIO_PinSource6);
+    GPIO_EXTILineConfig(GPIO_PortSourceGPIOA, GPIO_PinSource7);
+
+    EXTI_ClearITPendingBit(BUTTON_EXTI_LINES);
+    exti.EXTI_Line = BUTTON_EXTI_LINES;
+    exti.EXTI_Mode = EXTI_Mode_Interrupt;
+    /* Both edges record press/release changes for nonblocking debounce. */
+    exti.EXTI_Trigger = EXTI_Trigger_Rising_Falling;
+    exti.EXTI_LineCmd = ENABLE;
+    EXTI_Init(&exti);
+
+    NVIC_PriorityGroupConfig(NVIC_PriorityGroup_2);
+    nvic.NVIC_IRQChannelPreemptionPriority = 1;
+    nvic.NVIC_IRQChannelSubPriority = 0;
+    nvic.NVIC_IRQChannelCmd = ENABLE;
+
+    nvic.NVIC_IRQChannel = EXTI2_IRQn;
+    NVIC_Init(&nvic);
+    nvic.NVIC_IRQChannel = EXTI15_10_IRQn;
+    NVIC_Init(&nvic);
+    nvic.NVIC_IRQChannel = EXTI9_5_IRQn;
+    NVIC_Init(&nvic);
 }
 
-static uint8_t Key_Pressed(KeyFilter *key, uint8_t rawDown)
+void SysTick_Handler(void)
 {
-    if (rawDown == key->stableDown)
-    {
-        key->changeTicks = 0;
-        return 0;
-    }
-
-    key->changeTicks++;
-    if (key->changeTicks == KEY_DEBOUNCE_MS)
-    {
-        key->stableDown = rawDown;
-        key->changeTicks = 0;
-        return rawDown;
-    }
-    return 0;
+    systemMilliseconds++;
 }
 
-static void Frame_AddCell(uint8_t cellId)
+static void Button_RecordEdge(uint8_t buttonIndex, uint32_t extiLine)
 {
-    frame[cellId % SNAKE_SIDE] |= (uint8_t)(1U << (cellId / SNAKE_SIDE));
+    if (EXTI_GetITStatus(extiLine) != RESET)
+    {
+        EXTI_ClearITPendingBit(extiLine);
+        buttonLastEdgeMs[buttonIndex] = systemMilliseconds;
+        buttonEdgePending[buttonIndex] = 1;
+    }
 }
 
-static void Frame_Update(uint32_t elapsedMs)
+void EXTI2_IRQHandler(void)
 {
-    static const uint8_t winFace[8] = {0x3C, 0x42, 0x95, 0xA1,
-                                     0xA1, 0x95, 0x42, 0x3C};
-    uint8_t i;
+    Button_RecordEdge(0, EXTI_Line2);       /* SW1 / PA2 */
+}
 
-    for (i = 0; i < 8; i++)
+void EXTI15_10_IRQHandler(void)
+{
+    Button_RecordEdge(1, EXTI_Line13);      /* SW2 / PA13 */
+}
+
+void EXTI9_5_IRQHandler(void)
+{
+    /* Shared vector: check both lines, including simultaneous events. */
+    Button_RecordEdge(2, EXTI_Line6);       /* SW3 / PA6 */
+    Button_RecordEdge(3, EXTI_Line7);       /* SW4 / PA7 */
+}
+
+static void App_OnButtonPressed(uint8_t buttonIndex)
+{
+    switch (buttonIndex)
     {
-        frame[i] = 0;
+        case 0: /* SW1: D4 -> D5 -> ... -> D11 -> D4 */
+            ledDirection = 1;
+            currentLedIndex = 0;
+            lastLedStepMs = systemMilliseconds;
+            Led_Show(currentLedIndex);
+            break;
+        case 1: /* SW2: D11 -> D10 -> ... -> D4 -> D11 */
+            ledDirection = -1;
+            currentLedIndex = 7;
+            lastLedStepMs = systemMilliseconds;
+            Led_Show(currentLedIndex);
+            break;
+        case 2: /* SW3: buzzer on until SW4 is pressed. */
+            GPIO_ResetBits(GPIOA, BUZZER_PIN);
+            break;
+        case 3: /* SW4: buzzer off. */
+            GPIO_SetBits(GPIOA, BUZZER_PIN);
+            break;
     }
+}
 
-    if (game.state == SNAKE_LOST)
+static void Buttons_Process(void)
+{
+    uint8_t buttonIndex;
+    uint8_t sampleReady;
+    uint8_t isDown;
+    uint32_t previousInterruptMask;
+
+    for (buttonIndex = 0; buttonIndex < BUTTON_COUNT; buttonIndex++)
     {
-        for (i = 0; i < 8; i++)
+        sampleReady = 0;
+        isDown = 0;
+
+        /* Read the ISR-owned timestamp and consume its event atomically.
+           IRQs are disabled only for this short check, never for 20 ms. */
+        previousInterruptMask = __get_PRIMASK();
+        __disable_irq();
+        if (buttonEdgePending[buttonIndex] &&
+            (uint32_t)(systemMilliseconds - buttonLastEdgeMs[buttonIndex]) >=
+                BUTTON_DEBOUNCE_MS)
         {
-            frame[i] = (uint8_t)((1U << i) | (1U << (7 - i)));
+            isDown = (GPIO_ReadInputDataBit(GPIOA, buttonPins[buttonIndex]) == Bit_RESET);
+            buttonEdgePending[buttonIndex] = 0;
+            sampleReady = 1;
         }
-        return;
-    }
-    if (game.state == SNAKE_WON)
-    {
-        for (i = 0; i < 8; i++)
-        {
-            frame[i] = winFace[i];
-        }
-        return;
-    }
-    if (game.state == SNAKE_PAUSED && (elapsedMs / 400U) % 2U != 0)
-    {
-        return;
-    }
+        __set_PRIMASK(previousInterruptMask);
 
-    for (i = 0; i < game.snakeLength; i++)
-    {
-        Frame_AddCell(game.bodyCellIds[i]);
+        if (sampleReady && isDown != buttonStableDown[buttonIndex])
+        {
+            buttonStableDown[buttonIndex] = isDown;
+            if (isDown)
+            {
+                App_OnButtonPressed(buttonIndex);
+            }
+        }
     }
-    if (game.foodCellId != SNAKE_NO_FOOD && (elapsedMs / 200U) % 2U == 0)
+}
+
+static void Led_Update(void)
+{
+    uint32_t now = systemMilliseconds;
+
+    if (ledDirection != 0 && (uint32_t)(now - lastLedStepMs) >= LED_STEP_MS)
     {
-        Frame_AddCell(game.foodCellId);
+        lastLedStepMs = now;
+        currentLedIndex = (uint8_t)((currentLedIndex + ledDirection + 8) % 8);
+        Led_Show(currentLedIndex);
     }
 }
 
 int main(void)
 {
-    KeyFilter leftKey = {0, 0};
-    KeyFilter rightKey = {0, 0};
-    KeyFilter playKey = {0, 0};
-    uint32_t elapsedMs = 0;
-    uint16_t moveTicks = 0;
-    uint16_t keyLevels;
-    uint8_t column = 0;
-    uint8_t leftPressed;
-    uint8_t rightPressed;
-    uint8_t playPressed;
-
-    /* Startup SystemInit configures the 8 MHz HSE x 9 = 72 MHz clock. */
     SystemCoreClockUpdate();
-    SysTick_Init((u8)(SystemCoreClock / 1000000U));
     Hardware_Init();
-    Snake_Init(&game, 1);
-    Frame_Update(elapsedMs);
+    exti_init();
+
+    /* 72 MHz / 1000 = 72000 cycles: a periodic 1 ms system tick.
+       Do not call the legacy delay_ms/delay_us helpers: they also own SysTick. */
+    SysTick_Config(SystemCoreClock / 1000U);
 
     while (1)
     {
-        /* One column per millisecond: about 120 complete frames per second.
-           The game runs cooperatively; no long movement delays stop scanning. */
-        Matrix_ScanColumn(column);
-        Buzzer_WaitOneMs();
-        GPIO_SetBits(GPIOB, MATRIX_ROW_PINS);
-        elapsedMs++;
-
-        keyLevels = GPIO_ReadInputData(GPIOA);
-        leftPressed = Key_Pressed(&leftKey, (keyLevels & KEY_LEFT_PIN) == 0);
-        rightPressed = Key_Pressed(&rightKey, (keyLevels & KEY_RIGHT_PIN) == 0);
-        playPressed = Key_Pressed(&playKey, (keyLevels & KEY_PLAY_PIN) == 0);
-
-        if (playPressed)
-        {
-            /* Vary the food sequence with the user's start/restart timing. */
-            if (game.state == SNAKE_READY)
-            {
-                Snake_Init(&game, elapsedMs);
-            }
-            else if (game.state == SNAKE_LOST || game.state == SNAKE_WON)
-            {
-                game.randomState ^= elapsedMs;
-            }
-            Snake_TogglePlay(&game);
-            moveTicks = 0;
-        }
-        else if (leftPressed && !rightPressed)
-        {
-            Snake_Turn(&game, 0);
-        }
-        else if (rightPressed && !leftPressed)
-        {
-            Snake_Turn(&game, 1);
-        }
-
-        if (game.state == SNAKE_PLAYING)
-        {
-            moveTicks++;
-            if (moveTicks >= MOVE_INTERVAL_MS)
-            {
-                moveTicks = 0;
-                Snake_Step(&game);
-            }
-        }
-
-        Buzzer_UpdateState(game.state);
-
-        column = (uint8_t)((column + 1) % 8);
-        if (column == 0)
-        {
-            /* Publish a complete frame only between two refresh cycles. */
-            Frame_Update(elapsedMs);
-        }
+        Buttons_Process();
+        Led_Update();
+        __WFI(); /* Wake on the next SysTick or button interrupt. */
     }
 }

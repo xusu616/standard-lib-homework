@@ -1,0 +1,39 @@
+{
+    "configurations": [
+        {
+            "name": "STM32F103C8 - Browse",
+            "compilerPath": "D:/Keli/ARM/ARMCLANG/bin/armclang.exe",
+            "compilerArgs": [
+                "--target=arm-arm-none-eabi",
+                "-mcpu=cortex-m3",
+                "-mthumb",
+                "-std=gnu99"
+            ],
+            "intelliSenseMode": "windows-clang-arm",
+            "cStandard": "gnu99",
+            "cppStandard": "gnu++11",
+            "defines": [
+                "USE_STDPERIPH_DRIVER",
+                "STM32F10X_MD"
+            ],
+            "includePath": [
+                "${workspaceFolder}/User",
+                "${workspaceFolder}/Public",
+                "${workspaceFolder}/Libraries/CMSIS",
+                "${workspaceFolder}/Libraries/STM32F10x_StdPeriph_Driver/inc"
+            ],
+            "compileCommands": "${workspaceFolder}/.vscode/compile_commands.json",
+            "browse": {
+                "path": [
+                    "${workspaceFolder}/User",
+                    "${workspaceFolder}/Public",
+                    "${workspaceFolder}/Libraries/CMSIS",
+                    "${workspaceFolder}/Libraries/STM32F10x_StdPeriph_Driver/inc",
+                    "${workspaceFolder}/Libraries/STM32F10x_StdPeriph_Driver/src"
+                ],
+                "limitSymbolsToIncludedHeaders": true
+            }
+        }
+    ],
+    "version": 4
+}
