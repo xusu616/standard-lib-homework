@@ -1,0 +1,16 @@
+[
+    {
+        "directory": "D:/Keli5WorkPlace/GEC_STM32F103",
+        "file": "D:/Keli5WorkPlace/GEC_STM32F103/tests/exti_lab_test.c",
+        "arguments": [
+            "D:/x86_64-15.2.0-release-posix-seh-ucrt-rt_v13-rev0/mingw64/bin/gcc.EXE",
+            "-std=c99",
+            "-fsyntax-only",
+            "-I",
+            "D:/Keli5WorkPlace/GEC_STM32F103/tests/mocks",
+            "-I",
+            "D:/Keli5WorkPlace/GEC_STM32F103/User",
+            "D:/Keli5WorkPlace/GEC_STM32F103/tests/exti_lab_test.c"
+        ]
+    }
+]

@@ -132,9 +132,7 @@ void PendSV_Handler(void)
   * @param  None
   * @retval None
   */
-void SysTick_Handler(void)
-{
-}
+/* SysTick_Handler is implemented in main.c for this EXTI experiment. */
 
 /******************************************************************************/
 /*                 STM32F10x Peripherals Interrupt Handlers                   */
